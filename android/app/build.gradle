@@ -3,6 +3,7 @@ apply plugin: 'com.android.application'
 android {
 	ndkVersion "$ndk_version"
 	defaultConfig {
+		// Keep this stable. Android updates require the same applicationId and signing certificate.
 		applicationId 'net.minetest.minetest'
 		minSdkVersion 21
 		compileSdk = 34
@@ -15,27 +16,36 @@ android {
 		buildConfig true
 	}
 
-	// load properties
+	// Local developer signing still works through android/local.properties.
+	// CI uses the LUANTI_SIGNING_* environment variables so the private key
+	// never needs to be committed to this public repository.
 	Properties props = new Properties()
 	def propfile = file('../local.properties')
 	if (propfile.exists())
 		props.load(new FileInputStream(propfile))
 
-	if (props.getProperty('keystore') != null) {
+	def signingStore = System.getenv('LUANTI_SIGNING_STORE') ?: props.getProperty('keystore')
+	def signingStorePassword = System.getenv('LUANTI_SIGNING_STORE_PASSWORD') ?: props.getProperty('keystore.password')
+	def signingKeyAlias = System.getenv('LUANTI_SIGNING_KEY_ALIAS') ?: props.getProperty('key')
+	def signingKeyPassword = System.getenv('LUANTI_SIGNING_KEY_PASSWORD') ?: props.getProperty('key.password')
+	def releaseSigningEnabled = signingStore && signingStorePassword && signingKeyAlias && signingKeyPassword
+
+	if (releaseSigningEnabled) {
 		signingConfigs {
 			release {
-				storeFile file(props['keystore'])
-				storePassword props['keystore.password']
-				keyAlias props['key']
-				keyPassword props['key.password']
+				storeFile file(signingStore)
+				storePassword signingStorePassword
+				keyAlias signingKeyAlias
+				keyPassword signingKeyPassword
 			}
 		}
+	}
 
-		buildTypes {
-			release {
-				minifyEnabled true
+	buildTypes {
+		release {
+			minifyEnabled true
+			if (releaseSigningEnabled)
 				signingConfig signingConfigs.release
-			}
 		}
 	}
 
