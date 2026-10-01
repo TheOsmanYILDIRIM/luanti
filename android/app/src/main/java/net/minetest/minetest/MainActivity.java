@@ -27,6 +27,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -106,7 +107,39 @@ public class MainActivity extends AppCompatActivity {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
 			createNotificationChannel();
 
-		checkAppVersion();
+		if (isModImportIntent(getIntent()))
+			importModAndContinue(getIntent().getData());
+		else
+			checkAppVersion();
+	}
+
+	private boolean isModImportIntent(Intent intent) {
+		return intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null;
+	}
+
+	private void importModAndContinue(Uri source) {
+		mProgressBar.setVisibility(View.VISIBLE);
+		mProgressBar.setIndeterminate(true);
+		mTextView.setVisibility(View.VISIBLE);
+		mTextView.setText("Installing mod...");
+
+		new Thread(() -> {
+			try {
+				String modName = ModZipImporter.install(MainActivity.this, source);
+				runOnUiThread(() -> {
+					Toast.makeText(MainActivity.this,
+						"Installed mod: " + modName, Toast.LENGTH_SHORT).show();
+					checkAppVersion();
+				});
+			} catch (Exception e) {
+				Log.w("MainActivity", "Could not import mod ZIP", e);
+				runOnUiThread(() -> {
+					Toast.makeText(MainActivity.this,
+						"Could not install mod: " + e.getLocalizedMessage(), Toast.LENGTH_LONG).show();
+					checkAppVersion();
+				});
+			}
+		}, "ModZipImporter").start();
 	}
 
 	private void checkAppVersion() {
