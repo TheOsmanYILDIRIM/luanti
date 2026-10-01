@@ -1,7 +1,7 @@
 name: android
 
-# build on c/cpp changes or workflow changes
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'lib/**.[ch]'
@@ -34,43 +34,82 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
+
     - name: Install deps
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends gettext
+
     - name: Set up JDK 17
       uses: actions/setup-java@v5
       with:
-          distribution: 'temurin'
-          java-version: '17'
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Prepare fixed release signing key
+      if: github.event_name != 'pull_request'
+      env:
+        ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      run: |
+        set -euo pipefail
+        for value in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+          if [ -z "${!value:-}" ]; then
+            echo "::error::Missing repository secret: $value"
+            exit 1
+          fi
+        done
+        printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/luanti-release.jks"
+        chmod 600 "$RUNNER_TEMP/luanti-release.jks"
+        {
+          echo "LUANTI_SIGNING_STORE=$RUNNER_TEMP/luanti-release.jks"
+          echo "LUANTI_SIGNING_STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+          echo "LUANTI_SIGNING_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+          echo "LUANTI_SIGNING_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+        } >> "$GITHUB_ENV"
+
     - name: Build AAB with Gradle
-      # We build an AAB as well for uploading to the the Play Store.
       run: cd android; ./gradlew bundlerelease
+
     - name: Build APKs with Gradle
-      # "assemblerelease" is very fast after "bundlerelease".
       run: cd android; ./gradlew assemblerelease
+
+    - name: Verify release APK is signed
+      if: github.event_name != 'pull_request'
+      run: |
+        set -euo pipefail
+        APK="$(find android/app/build/outputs/apk/release -name 'app-arm64-v8a-release.apk' -print -quit)"
+        test -n "$APK"
+        "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --verbose "$APK"
+
     - name: Save AAB artifact
       uses: actions/upload-artifact@v7
       with:
         name: Luanti-release.aab
         path: android/app/build/outputs/bundle/release/app-release.aab
+
     - name: Save armeabi artifact
       uses: actions/upload-artifact@v7
       with:
         name: Luanti-armeabi-v7a.apk
-        path: android/app/build/outputs/apk/release/app-armeabi-v7a-release-unsigned.apk
+        path: android/app/build/outputs/apk/release/app-armeabi-v7a-release*.apk
+
     - name: Save arm64 artifact
       uses: actions/upload-artifact@v7
       with:
         name: Luanti-arm64-v8a.apk
-        path: android/app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk
+        path: android/app/build/outputs/apk/release/app-arm64-v8a-release*.apk
+
     - name: Save x86 artifact
       uses: actions/upload-artifact@v7
       with:
         name: Luanti-x86.apk
-        path: android/app/build/outputs/apk/release/app-x86-release-unsigned.apk
+        path: android/app/build/outputs/apk/release/app-x86-release*.apk
+
     - name: Save x86_64 artifact
       uses: actions/upload-artifact@v7
       with:
         name: Luanti-x86_64.apk
-        path: android/app/build/outputs/apk/release/app-x86_64-release-unsigned.apk
+        path: android/app/build/outputs/apk/release/app-x86_64-release*.apk
