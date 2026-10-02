@@ -9,4 +9,7 @@
 	<string name="game_notification_title">Luanti is running</string>
 	<string name="ime_dialog_done">Done</string>
 	<string name="no_web_browser">No web browser found</string>
+	<string name="installing_content">Installing content&#8230;</string>
+	<string name="content_installed">Installed %1$s: %2$s</string>
+	<string name="content_install_failed">Could not install content: %1$s</string>
 </resources>
