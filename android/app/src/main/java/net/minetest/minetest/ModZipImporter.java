@@ -32,40 +32,73 @@ import java.util.zip.ZipFile;
 final class ModZipImporter {
 	private static final long MAX_UNCOMPRESSED_BYTES = 512L * 1024L * 1024L;
 
+	private enum PackageType {
+		MOD("mod", "mods"),
+		GAME("game", "games");
+
+		final String label;
+		final String directory;
+
+		PackageType(String label, String directory) {
+			this.label = label;
+			this.directory = directory;
+		}
+	}
+
+	private static final class PackageInfo {
+		final PackageType type;
+		final String rootPrefix;
+
+		PackageInfo(PackageType type, String rootPrefix) {
+			this.type = type;
+			this.rootPrefix = rootPrefix;
+		}
+	}
+
 	private ModZipImporter() {}
 
 	@NonNull
 	static String install(@NonNull Context context, @NonNull Uri source) throws IOException {
-		File cacheZip = new File(Utils.getCacheDirectory(context), "mod-import.zip");
+		File cacheZip = new File(Utils.getCacheDirectory(context), "content-import.zip");
 		copyUriToFile(context, source, cacheZip);
 
 		try (ZipFile zip = new ZipFile(cacheZip)) {
-			String rootPrefix = findModRoot(zip);
-			String modName = findModName(zip, rootPrefix);
-			if (modName == null || modName.isEmpty())
-				modName = fallbackModName(context, source, rootPrefix);
+			PackageInfo pkg = findPackageRoot(zip);
+			String packageName;
 
-			if (!modName.matches("[A-Za-z0-9_]+"))
-				throw new IOException("Invalid mod name: " + modName);
+			if (pkg.type == PackageType.MOD) {
+				packageName = findModName(zip, pkg.rootPrefix);
+				if (packageName == null || packageName.isEmpty())
+					packageName = fallbackPackageName(context, source, pkg.rootPrefix, "imported_mod");
+			} else {
+				// A Luanti game's directory name is its game id. game.conf's title/name is
+				// display metadata and should not be used as the installation directory.
+				packageName = fallbackPackageName(context, source, pkg.rootPrefix, "imported_game");
+			}
 
-			File modsDir = Utils.createDirs(Utils.getUserDataDirectory(context), "mods");
-			File staging = new File(modsDir, ".import-" + modName + "-" + System.nanoTime());
-			File target = new File(modsDir, modName);
+			if (!packageName.matches("[A-Za-z0-9_]+"))
+				throw new IOException("Invalid " + pkg.type.label + " name: " + packageName);
+
+			File contentDir = Utils.createDirs(
+				Utils.getUserDataDirectory(context), pkg.type.directory);
+			File staging = new File(contentDir,
+				".import-" + packageName + "-" + System.nanoTime());
+			File target = new File(contentDir, packageName);
 
 			if (!staging.mkdirs())
-				throw new IOException("Could not create temporary mod directory");
+				throw new IOException("Could not create temporary " + pkg.type.label + " directory");
 
 			boolean success = false;
 			try {
-				extract(zip, rootPrefix, staging);
+				extract(zip, pkg.rootPrefix, staging);
 
 				if (target.exists())
 					deleteRecursively(target);
 				if (!staging.renameTo(target))
-					throw new IOException("Could not move imported mod into place");
+					throw new IOException("Could not move imported " + pkg.type.label + " into place");
 
 				success = true;
-				return modName;
+				return pkg.type.label + ": " + packageName;
 			} finally {
 				if (!success)
 					deleteRecursively(staging);
@@ -90,7 +123,8 @@ final class ModZipImporter {
 		}
 	}
 
-	private static String findModRoot(ZipFile zip) throws IOException {
+	private static PackageInfo findPackageRoot(ZipFile zip) throws IOException {
+		boolean rootLooksLikeGame = false;
 		boolean rootLooksLikeMod = false;
 		Set<String> topLevelDirectories = new HashSet<>();
 
@@ -101,6 +135,8 @@ final class ModZipImporter {
 			if (name.isEmpty() || name.startsWith("__MACOSX/"))
 				continue;
 
+			if (name.equals("game.conf"))
+				rootLooksLikeGame = true;
 			if (name.equals("init.lua") || name.equals("mod.conf"))
 				rootLooksLikeMod = true;
 
@@ -111,17 +147,26 @@ final class ModZipImporter {
 				topLevelDirectories.add("");
 		}
 
+		// game.conf is authoritative for a game package. A game may contain files
+		// that look like mod files under its own tree.
+		if (rootLooksLikeGame)
+			return new PackageInfo(PackageType.GAME, "");
 		if (rootLooksLikeMod)
-			return "";
+			return new PackageInfo(PackageType.MOD, "");
 
 		if (topLevelDirectories.size() == 1) {
 			String only = topLevelDirectories.iterator().next();
-			if (!only.isEmpty() &&
-					(zip.getEntry(only + "/init.lua") != null || zip.getEntry(only + "/mod.conf") != null))
-				return only + "/";
+			if (!only.isEmpty()) {
+				String prefix = only + "/";
+				if (zip.getEntry(prefix + "game.conf") != null)
+					return new PackageInfo(PackageType.GAME, prefix);
+				if (zip.getEntry(prefix + "init.lua") != null ||
+						zip.getEntry(prefix + "mod.conf") != null)
+					return new PackageInfo(PackageType.MOD, prefix);
+			}
 		}
 
-		throw new IOException("ZIP does not contain a single Luanti mod");
+		throw new IOException("ZIP does not contain a single Luanti mod or game");
 	}
 
 	private static String findModName(ZipFile zip, String rootPrefix) throws IOException {
@@ -130,7 +175,7 @@ final class ModZipImporter {
 			return null;
 
 		try (InputStream in = zip.getInputStream(conf)) {
-			String text = readSmallText(in, 64 * 1024);
+			String text = readSmallText(in, 64 * 1024, "mod.conf");
 			String[] lines = text.split("\\r?\\n");
 			for (String line : lines) {
 				String trimmed = line.trim();
@@ -148,9 +193,10 @@ final class ModZipImporter {
 		return null;
 	}
 
-	private static String fallbackModName(Context context, Uri source, String rootPrefix) {
+	private static String fallbackPackageName(
+			Context context, Uri source, String rootPrefix, String fallback) {
 		if (!rootPrefix.isEmpty())
-			return sanitizeName(rootPrefix.substring(0, rootPrefix.length() - 1));
+			return sanitizeName(rootPrefix.substring(0, rootPrefix.length() - 1), fallback);
 
 		String displayName = null;
 		try (Cursor cursor = context.getContentResolver().query(
@@ -163,16 +209,16 @@ final class ModZipImporter {
 		}
 
 		if (displayName == null || displayName.isEmpty())
-			displayName = "imported_mod";
+			displayName = fallback;
 		String lower = displayName.toLowerCase(Locale.ROOT);
 		if (lower.endsWith(".zip"))
 			displayName = displayName.substring(0, displayName.length() - 4);
-		return sanitizeName(displayName);
+		return sanitizeName(displayName, fallback);
 	}
 
-	private static String sanitizeName(String name) {
+	private static String sanitizeName(String name, String fallback) {
 		String sanitized = name.replaceAll("[^A-Za-z0-9_]", "_");
-		return sanitized.isEmpty() ? "imported_mod" : sanitized;
+		return sanitized.isEmpty() ? fallback : sanitized;
 	}
 
 	private static void extract(ZipFile zip, String rootPrefix, File destination) throws IOException {
@@ -212,7 +258,7 @@ final class ModZipImporter {
 				while ((read = in.read(buffer)) != -1) {
 					totalWritten += read;
 					if (totalWritten > MAX_UNCOMPRESSED_BYTES)
-						throw new IOException("Mod ZIP is too large");
+						throw new IOException("Content ZIP is too large");
 					out.write(buffer, 0, read);
 				}
 			}
@@ -228,7 +274,8 @@ final class ModZipImporter {
 		return normalized;
 	}
 
-	private static String readSmallText(InputStream in, int maxBytes) throws IOException {
+	private static String readSmallText(InputStream in, int maxBytes, String fileName)
+			throws IOException {
 		byte[] buffer = new byte[4096];
 		StringBuilder result = new StringBuilder();
 		int total = 0;
@@ -236,8 +283,9 @@ final class ModZipImporter {
 		while ((read = in.read(buffer)) != -1) {
 			total += read;
 			if (total > maxBytes)
-				throw new IOException("mod.conf is unexpectedly large");
-			result.append(new String(buffer, 0, read, java.nio.charset.StandardCharsets.UTF_8));
+				throw new IOException(fileName + " is unexpectedly large");
+			result.append(new String(buffer, 0, read,
+				java.nio.charset.StandardCharsets.UTF_8));
 		}
 		return result.toString();
 	}
@@ -253,6 +301,6 @@ final class ModZipImporter {
 			}
 		}
 		if (!file.delete())
-			throw new IOException("Could not replace existing mod: " + file.getName());
+			throw new IOException("Could not replace existing content: " + file.getName());
 	}
 }
