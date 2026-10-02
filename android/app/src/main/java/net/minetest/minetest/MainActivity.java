@@ -125,10 +125,10 @@ public class MainActivity extends AppCompatActivity {
 
 		new Thread(() -> {
 			try {
-				String modName = ModZipImporter.install(MainActivity.this, source);
+				String installedContent = ModZipImporter.install(MainActivity.this, source);
 				runOnUiThread(() -> {
 					Toast.makeText(MainActivity.this,
-						"Installed mod: " + modName, Toast.LENGTH_SHORT).show();
+						"Installed " + installedContent, Toast.LENGTH_SHORT).show();
 					checkAppVersion();
 				});
 			} catch (Exception e) {
