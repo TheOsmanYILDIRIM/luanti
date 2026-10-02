@@ -34,7 +34,8 @@ final class ModZipImporter {
 
 	private enum PackageType {
 		MOD("mod", "mods"),
-		GAME("game", "games");
+		GAME("game", "games"),
+		TEXTURE_PACK("texture pack", "textures");
 
 		final String label;
 		final String directory;
@@ -70,10 +71,13 @@ final class ModZipImporter {
 				packageName = findModName(zip, pkg.rootPrefix);
 				if (packageName == null || packageName.isEmpty())
 					packageName = fallbackPackageName(context, source, pkg.rootPrefix, "imported_mod");
-			} else {
+			} else if (pkg.type == PackageType.GAME) {
 				// A Luanti game's directory name is its game id. game.conf's title/name is
 				// display metadata and should not be used as the installation directory.
 				packageName = fallbackPackageName(context, source, pkg.rootPrefix, "imported_game");
+			} else {
+				packageName = fallbackPackageName(
+					context, source, pkg.rootPrefix, "imported_texture_pack");
 			}
 
 			if (!packageName.matches("[A-Za-z0-9_]+"))
@@ -126,6 +130,7 @@ final class ModZipImporter {
 	private static PackageInfo findPackageRoot(ZipFile zip) throws IOException {
 		boolean rootLooksLikeGame = false;
 		boolean rootLooksLikeMod = false;
+		boolean rootLooksLikeTexturePack = false;
 		Set<String> topLevelDirectories = new HashSet<>();
 
 		Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -137,6 +142,8 @@ final class ModZipImporter {
 
 			if (name.equals("game.conf"))
 				rootLooksLikeGame = true;
+			if (name.equals("texture_pack.conf"))
+				rootLooksLikeTexturePack = true;
 			if (name.equals("init.lua") || name.equals("mod.conf"))
 				rootLooksLikeMod = true;
 
@@ -151,6 +158,8 @@ final class ModZipImporter {
 		// that look like mod files under its own tree.
 		if (rootLooksLikeGame)
 			return new PackageInfo(PackageType.GAME, "");
+		if (rootLooksLikeTexturePack)
+			return new PackageInfo(PackageType.TEXTURE_PACK, "");
 		if (rootLooksLikeMod)
 			return new PackageInfo(PackageType.MOD, "");
 
@@ -160,13 +169,15 @@ final class ModZipImporter {
 				String prefix = only + "/";
 				if (zip.getEntry(prefix + "game.conf") != null)
 					return new PackageInfo(PackageType.GAME, prefix);
+				if (zip.getEntry(prefix + "texture_pack.conf") != null)
+					return new PackageInfo(PackageType.TEXTURE_PACK, prefix);
 				if (zip.getEntry(prefix + "init.lua") != null ||
 						zip.getEntry(prefix + "mod.conf") != null)
 					return new PackageInfo(PackageType.MOD, prefix);
 			}
 		}
 
-		throw new IOException("ZIP does not contain a single Luanti mod or game");
+		throw new IOException("ZIP does not contain a single Luanti mod, game, or texture pack");
 	}
 
 	private static String findModName(ZipFile zip, String rootPrefix) throws IOException {
