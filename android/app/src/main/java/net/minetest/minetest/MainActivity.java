@@ -27,6 +27,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -106,7 +107,43 @@ public class MainActivity extends AppCompatActivity {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
 			createNotificationChannel();
 
-		checkAppVersion();
+		if (isContentImportIntent(getIntent()))
+			importContentAndContinue(getIntent().getData());
+		else
+			checkAppVersion();
+	}
+
+	private boolean isContentImportIntent(Intent intent) {
+		return intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) &&
+			intent.getData() != null;
+	}
+
+	private void importContentAndContinue(Uri source) {
+		mProgressBar.setVisibility(View.VISIBLE);
+		mProgressBar.setIndeterminate(true);
+		mTextView.setVisibility(View.VISIBLE);
+		mTextView.setText(R.string.installing_content);
+
+		new Thread(() -> {
+			try {
+				ContentZipImporter.InstallResult result =
+					ContentZipImporter.install(MainActivity.this, source);
+				runOnUiThread(() -> {
+					Toast.makeText(MainActivity.this,
+						getString(R.string.content_installed, result.type.label, result.name),
+						Toast.LENGTH_SHORT).show();
+					checkAppVersion();
+				});
+			} catch (Exception e) {
+				Log.w("MainActivity", "Could not import content ZIP", e);
+				runOnUiThread(() -> {
+					Toast.makeText(MainActivity.this,
+						getString(R.string.content_install_failed, e.getLocalizedMessage()),
+						Toast.LENGTH_LONG).show();
+					checkAppVersion();
+				});
+			}
+		}, "ContentZipImporter").start();
 	}
 
 	private void checkAppVersion() {
